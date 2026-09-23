@@ -1,0 +1,17 @@
+# Dependencias (se reinstalan con npm install, no deben subirse)
+node_modules/
+
+# Variables de entorno y secretos NUNCA subir esto
+.env
+.env.local
+.env.*.local
+
+# Archivos generados por el sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+
+# Carpeta de salida de PDFs/imagenes de prueba (opcional)
+*.pdf

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Chatbot de Bebidas Valentino — Demo MongoDB Vector Search</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; background: #f2f6f4; margin: 0; }
+  .app { max-width: 480px; margin: 30px auto; background: white; border-radius: 12px;
+         box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; }
+  header { background: #0B3D2E; color: white; padding: 16px 20px; display: flex;
+           justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 17px; }
+  header p { margin: 4px 0 0; font-size: 12px; opacity: 0.8; }
+  header button { background: rgba(255,255,255,0.15); color: white; border: none;
+                  border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+  header button:hover { background: rgba(255,255,255,0.28); }
+  #chat { height: 420px; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.4; }
+  .user { align-self: flex-end; background: #0B3D2E; color: white; border-bottom-right-radius: 3px; }
+  .bot { align-self: flex-start; background: #eef2f0; color: #222; border-bottom-left-radius: 3px; }
+  .sistema { align-self: center; background: #fff3cd; color: #664d03; font-size: 12px; padding: 6px 10px; }
+  .productos { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .producto-chip { display: flex; align-items: center; gap: 6px; background: #e2ede8;
+                    border-radius: 8px; padding: 4px 6px 4px 10px; font-size: 12px; }
+  .producto-chip button { background: #0B3D2E; color: white; border: none; border-radius: 5px;
+                           padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .producto-chip button:hover { background: #0e4d3a; }
+
+  #carrito-bar { border-top: 1px solid #eee; padding: 10px 16px; font-size: 13px;
+                 background: #fafcfb; display: none; }
+  #carrito-bar.visible { display: block; }
+  #carrito-items { margin-bottom: 8px; }
+  #carrito-items div { display: flex; justify-content: space-between; padding: 2px 0; }
+  .carrito-acciones { display: flex; gap: 8px; }
+  .carrito-acciones button { flex: 1; border: none; border-radius: 6px; padding: 8px; font-size: 13px; cursor: pointer; }
+  #btn-confirmar { background: #0B3D2E; color: white; }
+  #btn-confirmar:hover { background: #0e4d3a; }
+  #btn-vaciar { background: #eee; color: #555; }
+  #btn-vaciar:hover { background: #e0e0e0; }
+
+  form { display: flex; border-top: 1px solid #eee; }
+  input { flex: 1; border: none; padding: 14px; font-size: 14px; outline: none; }
+  button.enviar { background: #0B3D2E; color: white; border: none; padding: 0 18px; cursor: pointer; }
+  button.enviar:hover { background: #0e4d3a; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>🥤 Bebidas Valentino — Asistente</h1>
+      <p>Chatbot con MongoDB Atlas Vector Search</p>
+    </div>
+    <button id="btn-mis-pedidos">Mis pedidos</button>
+  </header>
+  <div id="chat"></div>
+
+  <div id="carrito-bar">
+    <div id="carrito-items"></div>
+    <div class="carrito-acciones">
+      <button id="btn-vaciar">Vaciar</button>
+      <button id="btn-confirmar">Confirmar pedido</button>
+    </div>
+  </div>
+
+  <form id="form">
+    <input id="input" placeholder="Ej: quiero un agua sin azúcar..." autocomplete="off" />
+    <button class="enviar" type="submit">Enviar</button>
+  </form>
+</div>
+
+<script>
+const API_URL = "http://localhost:3001";
+const sesionId = "sesion-" + Math.random().toString(36).slice(2, 9);
+const chat = document.getElementById("chat");
+const form = document.getElementById("form");
+const input = document.getElementById("input");
+const carritoBar = document.getElementById("carrito-bar");
+const carritoItemsEl = document.getElementById("carrito-items");
+
+let carrito = {}; // { sku: { nombre, cantidad } }
+
+function agregarMensaje(texto, tipo, productos) {
+  const div = document.createElement("div");
+  div.className = "msg " + tipo;
+  div.textContent = texto;
+
+  if (productos && productos.length) {
+    const cont = document.createElement("div");
+    cont.className = "productos";
+    productos.forEach((p) => {
+      const chip = document.createElement("span");
+      chip.className = "producto-chip";
+
+      const label = document.createElement("span");
+      label.textContent = p.nombre;
+
+      const btn = document.createElement("button");
+      btn.textContent = "+ Agregar";
+      btn.onclick = () => agregarAlCarrito(p.sku, p.nombre);
+
+      chip.appendChild(label);
+      chip.appendChild(btn);
+      cont.appendChild(chip);
+    });
+    div.appendChild(cont);
+  }
+
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function agregarAlCarrito(sku, nombre) {
+  if (!carrito[sku]) carrito[sku] = { nombre, cantidad: 0 };
+  carrito[sku].cantidad += 1;
+  renderCarrito();
+}
+
+function renderCarrito() {
+  const skus = Object.keys(carrito);
+  if (skus.length === 0) {
+    carritoBar.classList.remove("visible");
+    return;
+  }
+  carritoBar.classList.add("visible");
+  carritoItemsEl.innerHTML = "";
+  skus.forEach((sku) => {
+    const item = carrito[sku];
+    const row = document.createElement("div");
+    row.innerHTML = `<span>${item.nombre} x${item.cantidad}</span>`;
+    carritoItemsEl.appendChild(row);
+  });
+}
+
+document.getElementById("btn-vaciar").addEventListener("click", () => {
+  carrito = {};
+  renderCarrito();
+});
+
+document.getElementById("btn-confirmar").addEventListener("click", async () => {
+  const items = Object.entries(carrito).map(([sku, v]) => ({ sku, cantidad: v.cantidad }));
+  if (!items.length) return;
+  try {
+    const res = await fetch(`${API_URL}/api/pedido`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sesionId, items }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const resumen = items.map((i) => `${i.cantidad}x ${carrito[i.sku].nombre}`).join(", ");
+      agregarMensajeSistema(`✅ Pedido confirmado: ${resumen}`);
+      carrito = {};
+      renderCarrito();
+    } else {
+      agregarMensajeSistema("No se pudo confirmar el pedido.");
+    }
+  } catch (err) {
+    agregarMensajeSistema("Error confirmando el pedido.");
+  }
+});
+
+document.getElementById("btn-mis-pedidos").addEventListener("click", async () => {
+  try {
+    const res = await fetch(`${API_URL}/api/pedidos/${sesionId}`);
+    const pedidos = await res.json();
+    if (!pedidos.length) {
+      agregarMensajeSistema("Aún no tienes pedidos confirmados en esta sesión.");
+      return;
+    }
+    const resumen = pedidos
+      .map((p, i) => {
+        const items = p.items.map((it) => `${it.cantidad}x ${it.nombre}`).join(", ");
+        return `Pedido ${i + 1} (${p.estado}): ${items}`;
+      })
+      .join("\n");
+    agregarMensajeSistema(resumen);
+  } catch (err) {
+    agregarMensajeSistema("Error consultando tus pedidos.");
+  }
+});
+
+function agregarMensajeSistema(texto) {
+  const div = document.createElement("div");
+  div.className = "msg sistema";
+  div.style.whiteSpace = "pre-line";
+  div.textContent = texto;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+agregarMensaje("¡Hola! Soy el asistente de Bebidas Valentino. Pregúntame sobre el catálogo o dime qué bebida quieres pedir.", "bot");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const mensaje = input.value.trim();
+  if (!mensaje) return;
+  agregarMensaje(mensaje, "user");
+  input.value = "";
+
+  try {
+    const res = await fetch(`${API_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mensaje, sesionId }),
+    });
+    const data = await res.json();
+    agregarMensaje(data.respuesta, "bot", data.productos_sugeridos);
+  } catch (err) {
+    agregarMensajeSistema("Error conectando con el servidor.");
+  }
+});
+</script>
+</body>
+</html>
